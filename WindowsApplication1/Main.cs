@@ -11,6 +11,7 @@ using System;
 using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Data.SqlClient;
+using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.IO.Ports;
@@ -849,87 +850,94 @@ namespace WindowsApplication1
         {
             try
             {
-                if (_StopMachineOnFinishPack)
-                {
-                    StopMachine();
-                }
-                // TODO: Makineye paketin bittiğini gönder
-                // TODO: Takip sayısı resetlenecek
-               // ExternalConveyor();
-                // Veri tabanında paket kodunu işle
-                var batchCode = Guid.NewGuid().ToString();
-                var BatchDate = DateTime.Now;
-                var batchCount = SucceedPassportCount;
-                UpdateOutputPassCount(0);
-
-                log.Warning($" Paket Bitirildi");
-                // Ekrana uyarı
-                AddLog($"Paket bitirildi Sayı:{batchCount}, Paket Kodu {batchCode}");
-
-
-                #region OLEDB Test
-                using (var con = new SqlConnection(sqlConnectionstring))
-                {
-                    con.Open();
-                    SqlCommand cmd = con.CreateCommand();
-                    cmd.Connection = con;
-                    cmd.CommandText = $"Update PassportDetails Set BatchCode = '{batchCode}' Where Sent =1 and BatchCode is null";
-
-                    var reader = cmd.ExecuteNonQuery();
-                    if (reader == 0)
+                
+                Task.Run(() => {
+                    if (_StopMachineOnFinishPack)
                     {
-                        if (!isSentPassport)
+                        StopMachine();
+                    }
+                    // TODO: Makineye paketin bittiğini gönder
+                    // TODO: Takip sayısı resetlenecek
+                    // ExternalConveyor();
+                    // Veri tabanında paket kodunu işle
+                    var batchCode = Guid.NewGuid().ToString();
+                    var BatchDate = DateTime.Now;
+                    var batchCount = SucceedPassportCount;
+                    UpdateOutputPassCount(0);
+
+                    log.Warning($"Paket Bitirildi");
+                    // Ekrana uyarı
+                    AddLog($"Paket bitirildi Sayı:{batchCount}, Paket Kodu {batchCode}");
+
+
+                    #region OLEDB Test
+                    using (var con = new SqlConnection(sqlConnectionstring))
+                    {
+                        con.Open();
+                        SqlCommand cmd = con.CreateCommand();
+                        cmd.Connection = con;
+                        cmd.CommandText = $"Update PassportDetails Set BatchCode = '{batchCode}' Where Sent =1 and BatchCode is null";
+
+                        var reader = cmd.ExecuteNonQuery();
+                        if (reader == 0)
                         {
-                            log.Warning($" Gönderime hazır Pasaport bulunamadı");
-                            // Ekrana uyarı
-                            AddLog("Gönderime hazır Pasaport bulunamadı");
-                            isSentPassport = true;
+                            if (!isSentPassport)
+                            {
+                                log.Warning($" Gönderime hazır Pasaport bulunamadı");
+                                // Ekrana uyarı
+                                AddLog("Gönderime hazır Pasaport bulunamadı");
+                                isSentPassport = true;
+                            }
+                            //con.Close();
+                            return;
                         }
-                        con.Close();
-                        return;
+                        log.Information($" Gönderime hazır Pasaportlar BatchCode ile işaretlendi");
+                        var comCreateBatch = $"INSERT INTO [dbo].[Batches] " +
+                       "([BatchCode]     " +
+                       ",[PassportCount] " +
+                       ",[State]         " +
+                       ",[CreationDate]  " +
+                       ",[CreateDate]    " +
+                       ",[UpdateDate])    " +
+                  "VALUES " +
+                       $" ('{batchCode}' " +
+                       $" ,{reader} " +
+                       " ,3 " +
+                       $" ,'{BatchDate.ToString("yyyy-MM-dd HH:mm:ss.fff")}'" +
+                       $" ,'{BatchDate.ToString("yyyy-MM-dd HH:mm:ss.fff")}'" +
+                       $" ,'{BatchDate.ToString("yyyy-MM-dd HH:mm:ss.fff")}')";
+
+                        SqlCommand cmdBatch = con.CreateCommand();
+                        cmdBatch.Connection = con;
+                        cmdBatch.CommandText = comCreateBatch;
+
+                        var crBatch = cmdBatch.ExecuteNonQuery();
+                        if (crBatch == 0)
+                        {
+                            log.Warning($" Pasaportlara ait batch oluşturulamadı");
+                            // Ekrana uyarı
+                            AddLog("Pasaportlara ait batch oluşturulamadı");
+                            //con.Close();
+                            return;
+                        }
+
+                        //con.Close();
                     }
-                    log.Information($" Gönderime hazır Pasaportlar BatchCode ile işaretlendi");
-                    var comCreateBatch = $"INSERT INTO [dbo].[Batches] " +
-                   "([BatchCode]     " +
-                   ",[PassportCount] " +
-                   ",[State]         " +
-                   ",[CreationDate]  " +
-                   ",[CreateDate]    " +
-                   ",[UpdateDate])    " +
-              "VALUES " +
-                   $" ('{batchCode}' " +
-                   $" ,{reader} " +
-                   " ,3 " +
-                   $" ,'{BatchDate.ToString("yyyy-MM-dd HH:mm:ss.fff")}'" +
-                   $" ,'{BatchDate.ToString("yyyy-MM-dd HH:mm:ss.fff")}'" +
-                   $" ,'{BatchDate.ToString("yyyy-MM-dd HH:mm:ss.fff")}')";
-
-                    SqlCommand cmdBatch = con.CreateCommand();
-                    cmdBatch.Connection = con;
-                    cmdBatch.CommandText = comCreateBatch;
-
-                    var crBatch = cmdBatch.ExecuteNonQuery();
-                    if (crBatch == 0)
+                    var reportPath = $"C:/BitenIsler/{DateTime.Now.ToString("dd.MM.yyyy")}/{DateTime.Now.ToString("ddMMyyyyHHmmss")}.xlsx";
+                    ReportService.ExportBatch("Paket_Bilgi", new Batches()
                     {
-                        log.Warning($" Pasaportlara ait batch oluşturulamadı");
-                        // Ekrana uyarı
-                        AddLog("Pasaportlara ait batch oluşturulamadı");
-                        con.Close();
-                        return;
-                    }
+                        BatchCode = batchCode,
+                        CreationDate = BatchDate,
+                        PassportCount = batchCount,
+                        CreateDate = BatchDate
+                    }, reportPath);
+                    SendToPrinter(reportPath);
+                    #endregion
+                    // Paket raporu çıkar
 
-                    con.Close();
-                }
+                });
 
-                ReportService.ExportBatch("Paket_Bilgi",new Batches() {
-                BatchCode= batchCode,
-                CreationDate=BatchDate,
-                PassportCount = batchCount,
-                CreateDate = BatchDate
-                },$"C:/BitenIsler/{DateTime.Now.ToString("dd.MM.yyyy")}/{DateTime.Now.ToString("ddMMyyyyHHmmss")}.xlsx");
-
-                #endregion
-                // Paket raporu çıkar
+               
             }
             catch (Exception ex)
             {
@@ -937,7 +945,23 @@ namespace WindowsApplication1
 
             }
         }
+        private void SendToPrinter(string filepath)
+        {
+            ProcessStartInfo info = new ProcessStartInfo();
+            info.Verb = "print";
+            info.FileName = filepath;
+            info.CreateNoWindow = true;
+            info.WindowStyle = ProcessWindowStyle.Hidden;
 
+            Process p = new Process();
+            p.StartInfo = info;
+            p.Start();
+
+            p.WaitForInputIdle();
+            System.Threading.Thread.Sleep(3000);
+            if (false == p.CloseMainWindow())
+                p.Kill();
+        }
         bool DriveOutputConveyourLong()
         {
             //2.hızda harici konveyörü çalıştırarak pasaportların arasını aç
@@ -1006,7 +1030,7 @@ namespace WindowsApplication1
                         //AddLog($"Pasaport barkodu veri tabanında bulunamadı:{decodedData2}");
                         log.Error($"{LastSucceedPttBarcode} PTT barkodlu pasaport hatalı olarak işaretlendi.");
                     }
-                    con.Close();
+                    //con.Close();
                 }
             }
             catch (Exception ex)
@@ -1056,7 +1080,7 @@ namespace WindowsApplication1
                     {
                         var eff3 = command.ExecuteNonQuery();
                     }
-                    con.Close();
+                    //con.Close();
 
                     //MessageBox.Show("Veri tabanı temizleme işlemi tamamlandı", "Başarılı ışlem",MessageBoxButtons.OK,MessageBoxIcon.Information);
                     AddLog("Veri tabanı temizleme işlemi tamamlandı");
@@ -1167,9 +1191,9 @@ namespace WindowsApplication1
             //var sad = context.Database.CanConnect();// ilk pasaportu yazdırırken gecikme yaşanıyordu boş query çalıştırıp önceden yüklenmesini 
             label = File.ReadAllText(@"C:\PHASE.txt");
             #region OLEDB Test
-            SqlConnection con = new SqlConnection(sqlConnectionstring);
+            //SqlConnection con = new SqlConnection(sqlConnectionstring);
 
-            con.Open();
+            //con.Open();
             #endregion
             while (!backgroundWorker1.CancellationPending)
             {
@@ -1222,52 +1246,57 @@ namespace WindowsApplication1
                         // input = context.PassportDetails.AsNoTracking().FirstOrDefault(p => p.PasaportNo == decodedData);
 
                         #region OLEDB TEST
-                        if (!(con.State == System.Data.ConnectionState.Open))
+                        using (var con = new SqlConnection(sqlConnectionstring))
                         {
-                            switch (con.State)
+                            con.Open(); 
+                            //if (!(con.State == System.Data.ConnectionState.Open))
+                            //{
+                            //    switch (con.State)
+                            //    {
+                            //        case System.Data.ConnectionState.Closed:
+                            //            con.Open();
+
+                            //            break;
+                            //        case System.Data.ConnectionState.Connecting:
+                            //        case System.Data.ConnectionState.Executing:
+                            //        case System.Data.ConnectionState.Fetching:
+                            //            con.Close();
+                            //            con.Open();
+                            //            break;
+                            //        case System.Data.ConnectionState.Broken:
+                            //            con.Open();
+
+                            //            break;
+                            //        default:
+                            //            break;
+                            //    }
+                            //}
+                            SqlCommand cmd = con.CreateCommand();
+                            cmd.Connection = con;
+                            cmd.CommandText = $"Select * from PassportDetails Where PasaportNo = '{decodedData}'";
+
+                            var reader = cmd.ExecuteReader();
+                            while (reader.Read())
                             {
-                                case System.Data.ConnectionState.Closed:
-                                    con.Open();
+                                input.AliciAdSoyad1 = Convert.ToString(reader["AliciAdSoyad1"]);
+                                input.Alici2AdSoyad1 = Convert.ToString(reader["Alici2AdSoyad1"]);
+                                input.AliciAdres1 = Convert.ToString(reader["AliciAdres1"]);
+                                input.AliciAdres2 = Convert.ToString(reader["AliciAdres2"]);
+                                input.AliciAdres3 = Convert.ToString(reader["AliciAdres3"]);
+                                input.AliciCepTelefonu = Convert.ToString(reader["AliciCepTelefonu"]);
+                                input.TeslimAlacakKisi1 = Convert.ToString(reader["TeslimAlacakKisi1"]);
+                                input.IadeAdresi1 = Convert.ToString(reader["IadeAdresi1"]);
+                                input.IadeAdresi2 = Convert.ToString(reader["IadeAdresi2"]);
+                                input.IadeAdresi3 = Convert.ToString(reader["IadeAdresi3"]);
+                                long ptt = 0;
+                                var conres = Int64.TryParse(reader["PttBarkod"].ToString(), out ptt);
+                                if (conres)
+                                    input.PttBarkod = ptt;
 
-                                    break;
-                                case System.Data.ConnectionState.Connecting:
-                                case System.Data.ConnectionState.Executing:
-                                case System.Data.ConnectionState.Fetching:
-                                    con.Close();
-                                    con.Open();
-                                    break;
-                                case System.Data.ConnectionState.Broken:
-                                    con.Open();
-
-                                    break;
-                                default:
-                                    break;
                             }
+                            reader.Close();
                         }
-                        SqlCommand cmd = con.CreateCommand();
-                        cmd.Connection = con;
-                        cmd.CommandText = $"Select * from PassportDetails Where PasaportNo = '{decodedData}'";
-
-                        var reader = cmd.ExecuteReader();
-                        while (reader.Read())
-                        {
-                            input.AliciAdSoyad1 = Convert.ToString(reader["AliciAdSoyad1"]);
-                            input.Alici2AdSoyad1 = Convert.ToString(reader["Alici2AdSoyad1"]);
-                            input.AliciAdres1 = Convert.ToString(reader["AliciAdres1"]);
-                            input.AliciAdres2 = Convert.ToString(reader["AliciAdres2"]);
-                            input.AliciAdres3 = Convert.ToString(reader["AliciAdres3"]);
-                            input.AliciCepTelefonu = Convert.ToString(reader["AliciCepTelefonu"]);
-                            input.TeslimAlacakKisi1 = Convert.ToString(reader["TeslimAlacakKisi1"]);
-                            input.IadeAdresi1 = Convert.ToString(reader["IadeAdresi1"]);
-                            input.IadeAdresi2 = Convert.ToString(reader["IadeAdresi2"]);
-                            input.IadeAdresi3 = Convert.ToString(reader["IadeAdresi3"]);
-                            long ptt = 0;
-                            var conres = Int64.TryParse(reader["PttBarkod"].ToString(), out ptt);
-                            if (conres)
-                                input.PttBarkod = ptt;
-
-                        }
-                        reader.Close();
+                        
                         #endregion
 
                         //InvokeDefine(() => lstLog.Items.Add($"{DateTime.Now.ToString("HH:mm:ss.ffffff")} - Data alındı  - {decodedData}"));
@@ -1329,7 +1358,7 @@ namespace WindowsApplication1
                     log.Error(ex, "Uygulama ana döngüde hata alındı");
                     AddLog("Uygulama ana döngüde hata alındı");
                     #region OLEDB TEST
-                    con.Close();
+                    //con.Close();
                     #endregion
                 }
             }
@@ -1509,13 +1538,9 @@ namespace WindowsApplication1
 
                             //    //continue;
                             //}
-                            con.Close();
+                            //con.Close();
                         }
-                        
-                     
                     }
-                   
-                    
                         
                     log.Debug($"Paspaort ve PTT barkod eşleşme işlemi tamamlandı {findPassport.PassportNo}-{findPassport.PttBarcode}");
                     LastSucceedPttBarcode = findPassport.PttBarcode.Value;
@@ -2110,8 +2135,8 @@ namespace WindowsApplication1
 
                     //    //continue;
                     //}
-                    con.Close();
-                }
+                    //con.Close();
+                } 
 
 
             }

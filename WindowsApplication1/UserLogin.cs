@@ -1,4 +1,6 @@
-﻿using System;
+﻿using Microsoft.Identity.Client;
+using System;
+using System.ComponentModel;
 using System.Drawing;
 using System.Net.NetworkInformation;
 using System.Windows.Forms;

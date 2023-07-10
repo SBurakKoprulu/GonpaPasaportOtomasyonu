@@ -1,7 +1,9 @@
-﻿using GonpaPasaportOtomasyonu;
+﻿using DGVPrinterHelper;
+using GonpaPasaportOtomasyonu;
 using GonpaPasaportOtomasyonu.Models;
 using GonpaPasaportOtomasyonu.Properties;
 using GonpaPasaportOtomasyonu.Services;
+using Microsoft.EntityFrameworkCore.Metadata.Conventions;
 using Microsoft.IdentityModel.Tokens;
 using Modbus.Device;
 using SATOPrinterAPI;
@@ -13,6 +15,7 @@ using System.ComponentModel;
 using System.Data.SqlClient;
 using System.Diagnostics;
 using System.Drawing;
+using System.Drawing.Printing;
 using System.IO;
 using System.IO.Ports;
 using System.Linq;
@@ -61,6 +64,7 @@ namespace WindowsApplication1
         #region Check flags
         bool isEmergencyStop = false;
         bool isDoorOpen = false;
+        bool isDrawerTopDoorOpen = false;
         bool isDrawer1Open = false;
         bool isDrawer2Open = false;
         bool isDrawer1Full = false;
@@ -121,7 +125,6 @@ namespace WindowsApplication1
                 {
                     buttonAyarlar.Visible = false;
                     tabControl1.TabPages.Remove(tabPage4);
-
                 }
                 else if (userType == 1)
                 {
@@ -129,7 +132,7 @@ namespace WindowsApplication1
                 }
             }
             splashThread.Start();
-            Thread.Sleep(5000);
+
             CheckForIllegalCrossThreadCalls = false;
 
             sqlConnectionstring = Settings.Default.DBConnectionString;
@@ -183,8 +186,23 @@ namespace WindowsApplication1
             nudConveyourLongStep.Value = _ConveyourLongStep = Settings.Default.ConveyourLongStepSpan;
             chkStopMachineOnFinish.Checked = _StopMachineOnFinishPack = Settings.Default.StopMachineOnFinishPack;
             PackMaxCount = Settings.Default.ProductCount;
+            nudConveyorSpeed.Value = Settings.Default.ConveyorSpeed;
+            nudVaccuumSpeed.Value = Settings.Default.VaccuumSpeed;
+
             #region is plc ready(M2 set)
             SendReadyToMachine();
+            #endregion
+
+            #region Drawer Top Door Status Control
+            bool İsDrawerOpen = modbusMaster.ReadCoils(slaveAddress, 2068, 1)[0];
+            if (İsDrawerOpen)
+            {
+                checkBoxDrawerDoor.Checked = true;
+            } 
+            else
+            {
+                checkBoxDrawerDoor.Checked = false;
+            }
             #endregion
 
             CallDBProcedures();
@@ -192,7 +210,7 @@ namespace WindowsApplication1
             FullCheckMachine();
             splashThread.Abort();
         }
-        private void Main_FormClosing(object sender, FormClosingEventArgs e)
+        public void Main_FormClosing(object sender, FormClosingEventArgs e)
         {
             backgroundWorker1.CancelAsync();
             backgroundWorker2.CancelAsync();
@@ -202,7 +220,7 @@ namespace WindowsApplication1
             try
             {
                 StopMachine();
-                modbusMaster.WriteSingleCoil(slaveAddress, 2050, false); // M2 set lazım ama niye bilmiyoruz :)
+                modbusMaster.WriteSingleCoil(slaveAddress, 2050, false); // M2 set send info of Program Online to plc 
             }
             catch (Exception)
             {
@@ -276,9 +294,9 @@ namespace WindowsApplication1
             {
                 try
                 {
-                modbusMaster.WriteSingleCoil(slaveAddress, 1305, false); //y31 reset
+                modbusMaster.WriteSingleCoil(slaveAddress, 1305, false); //Y31 reset
 
-                modbusMaster.WriteSingleCoil(slaveAddress, 2064, true); //m16 set
+                modbusMaster.WriteSingleCoil(slaveAddress, 2064, true); //M16 set
                     return true;
                 }
                 catch (Exception)
@@ -356,41 +374,14 @@ namespace WindowsApplication1
                 StopMachine();
             }
         }
-        private void RejectOut()
-            {
-                #region M1 set
-                modbusMaster.WriteSingleCoil(slaveAddress, 2050, true);
-                #endregion
-            }
-            private void Rejectinput()
-            {
-                #region M1 set
-                modbusMaster.WriteSingleCoil(slaveAddress, 2049, true);
-                #endregion
-            }
             private void DriveOutputConveyourShort()
             {
-               
-            //Task.Run(() => {
-                //Thread.Sleep(300);
-
-                //#region Y34 set/reset
-                //modbusMaster.WriteSingleCoil(slaveAddress, 1308, true); // Y34 Conveyor sürme
-                //Thread.Sleep(_ConveyourShortStep);
-                //modbusMaster.WriteSingleCoil(slaveAddress, 1308, false); // Y34 Conveyor sürme
-                //#endregion
-
                 //Harici konveyör kısa adım çalıştırma
                 modbusMaster.WriteSingleCoil(slaveAddress, 2067, true);// M19 set(ExternalConveyorShortStep)
-            //});
-               
             }
-
-
         #endregion
 
         #region Kontrol Methodları
-
 
         //Giriş barkod okuyucu
         bool CheckInputBarcodeReader()
@@ -402,14 +393,12 @@ namespace WindowsApplication1
                 return false;
             }
 
-
             var connection = clientSocket.IsBound;
             if (connection)
             {
                 // Giriş barkod okuyucu bağlantısı var
                 InvokeDefine(() => stsInputBarcodeReader.BackColor = Color.YellowGreen);
                 return true;
-
             }
             else
             {
@@ -425,7 +414,6 @@ namespace WindowsApplication1
         {
             try
             {
-
                 // SATOPrinter.Connect();
                 isPrinterOnline = SATOPrinter.GetPrinterStatus().IsOnline;
                 if (!isPrinterOnline)
@@ -455,7 +443,7 @@ namespace WindowsApplication1
         {
             try
             {
-                SATOPrinter.TCPIPAddress = GonpaPasaportOtomasyonu.Properties.Settings.Default.PrinterIpAddress;
+                SATOPrinter.TCPIPAddress = Settings.Default.PrinterIpAddress;
                 SATOPrinter.TCPIPPort = "9100";
                 SATOPrinter.Interface = Printer.InterfaceType.TCPIP;
                 SATOPrinter.Connect();
@@ -514,6 +502,7 @@ namespace WindowsApplication1
                     InvokeDefine(() =>
                     {
                         stsDoors.BackColor = Color.LightCoral;
+                        stsDrawerTopDoor.BackColor = Color.LightCoral;
                         stsDrawer1.BackColor = Color.LightCoral;
                         stsDrawer2.BackColor = Color.LightCoral;
                         stsLine.BackColor = Color.LightCoral;
@@ -540,6 +529,7 @@ namespace WindowsApplication1
                 InvokeDefine(() =>
                 {
                     stsDoors.BackColor = Color.LightCoral;
+                    stsDrawerTopDoor.BackColor= Color.LightCoral;
                     stsDrawer1.BackColor = Color.LightCoral;
                     stsDrawer2.BackColor = Color.LightCoral;
                     stsLine.BackColor = Color.LightCoral;
@@ -575,13 +565,27 @@ namespace WindowsApplication1
                         return;
                     }
 
-                    //ushort uOuputCount = modbusMaster.ReadHoldingRegisters(slaveAddress, 43584, 1)[0];
+                    #region Encoder Value
+                    var c251 = modbusMaster.ReadHoldingRegisters(slaveAddress, 4096, 4); //C251 encoder değeri için D0 okunuyor
+                    var encC251Byte = BitConverter.GetBytes(c251[0]);
+                    var encC251Byte2 = BitConverter.GetBytes(c251[1]);
+                    byte[] lenghtArrayC251 = new byte[8];
+                    Array.Copy(encC251Byte, 0, lenghtArrayC251, 0, 2);
+                    Array.Copy(encC251Byte2, 0, lenghtArrayC251, 2, 2);
+                    var encoderPositionC251 = BitConverter.ToInt64(lenghtArrayC251, 0);
+                    InvokeDefine(() => { textBoxEncoderC251.Text = encoderPositionC251.ToString(); });
+                    #endregion
 
-                  
-
-                    ushort c251 = modbusMaster.ReadHoldingRegisters(slaveAddress, 43835, 1)[0];
-                   
-                    InvokeDefine(() => { textBoxEncoderC251.Text = c251.ToString(); });
+                    #region Counter
+                    var D600 = modbusMaster.ReadHoldingRegisters(slaveAddress, 4696, 4); //D600 sayaç değeri okunuyor
+                    var D600Byte = BitConverter.GetBytes(D600[0]);
+                    var D600Byte2 = BitConverter.GetBytes(D600[1]);
+                    byte[] lenghtArrayD600 = new byte[8];
+                    Array.Copy(D600Byte, 0, lenghtArrayD600, 0, 2);
+                    Array.Copy(D600Byte2, 0, lenghtArrayD600, 2, 2);
+                    var counterD600 = BitConverter.ToInt64(lenghtArrayD600, 0);
+                    InvokeDefine(() => { textBoxCounter.Text = counterD600.ToString(); });
+                    #endregion
 
                     //Makine Çalışıyor mu
                     bool M0 = modbusMaster.ReadCoils(slaveAddress, 2048, 1)[0];
@@ -613,6 +617,7 @@ namespace WindowsApplication1
                             InvokeDefine(() =>
                             {
                                 stsDoors.BackColor = Color.LightCoral;
+                                stsDrawerTopDoor.BackColor = Color.LightCoral;
                                 stsDrawer1.BackColor = Color.LightCoral;
                                 stsDrawer2.BackColor = Color.LightCoral;
                                 stsLine.BackColor = Color.LightCoral;
@@ -624,18 +629,28 @@ namespace WindowsApplication1
                             AddLog("Acil Stop butonuna basıldı.");
                             isEmergencyStop = true;
                         }
-
                     }   
 
-                    bool X25 = modbusMaster.ReadInputs(slaveAddress, 1045, 1)[0];
-                    if (!X25)
+                    bool M209 = modbusMaster.ReadInputs(slaveAddress, 2257, 1)[0];
+                    if (M209)
                     {   //"ön kapı açık"
                         if (!isDoorOpen)
                         {
-                            //textBoxAlarmDoor.Visible = true;
                             InvokeDefine(() => stsDoors.BackColor = Color.LightCoral);
-                            AddLog("Makine kapağı açıldı.");
+                            AddLog("Ön kapak açıldı.");
                             isDoorOpen = true;
+                        }
+
+                    }
+
+                    bool M211 = modbusMaster.ReadInputs(slaveAddress, 2259, 1)[0];
+                    if (M211)
+                    {   //"Tahliye çekmecesi üst kapı açık"
+                        if (!isDrawerTopDoorOpen)
+                        {
+                            InvokeDefine(() => stsDrawerTopDoor.BackColor = Color.LightCoral);
+                            AddLog("Tahliye çekmecesi üst kapağı açıldı.");
+                            isDrawerTopDoorOpen = true;
                         }
 
                     }
@@ -646,7 +661,6 @@ namespace WindowsApplication1
                         //"1. çekmece açık";
                         if (!isDrawer1Open)
                         {
-                            //textBoxDrawer1Open.Visible = true;
                             InvokeDefine(() => stsDrawer1.BackColor = Color.LightCoral);
                             AddLog("1. Tahliye Çekmecesi açıldı.");
                             isDrawer1Open = true;
@@ -660,7 +674,6 @@ namespace WindowsApplication1
                         //"2. çekmece açık";
                         if (!isDrawer2Open)
                         {
-                            //textBoxDrawer2Open.Visible = true;
                             InvokeDefine(() => stsDrawer2.BackColor = Color.LightCoral);
                             AddLog("2. Tahliye Çekmecesi açıldı.");
                             isDrawer2Open = true;
@@ -674,7 +687,6 @@ namespace WindowsApplication1
                         //"1. çekmece dolu";
                         if (!isDrawer1Full)
                         {
-                            //textBoxDrawer1Full.Visible = true;
                             InvokeDefine(() => stsDrawer1.BackColor = Color.LightYellow);
                             AddLog("1. Tahliye çekmecesi dolu.");
                             isDrawer1Full = true;
@@ -687,7 +699,6 @@ namespace WindowsApplication1
                         //"2. çekmece dolu";
                         if (!isDrawer2Full)
                         {
-                            //textBoxDrawer2Full.Visible = true;
                             InvokeDefine(() => stsDrawer2.BackColor = Color.LightYellow);
                             AddLog("2. Tahliye çekmecesi dolu.");
                             isDrawer2Full = true;
@@ -733,35 +744,6 @@ namespace WindowsApplication1
                             isHWStop = true;
                         }
                     }
-
-                    bool M15 = modbusMaster.ReadInputs(slaveAddress, 2067, 1)[0]; //m19
-                    if (M15) 
-                    {
-                        InvokeDefine(() => ledBulbM15.Color = Color.Green);
-                    }
-                    else
-                    {
-                        InvokeDefine(() => ledBulbM15.Color = Color.Red);
-                    }
-                    bool M18 = modbusMaster.ReadInputs(slaveAddress, 2067, 1)[0]; //m18
-                    if (M18)
-                    {
-                        InvokeDefine(() => ledBulbM19.Color = Color.Green);
-                    }
-                    else
-                    {
-                        InvokeDefine(() => ledBulbM19.Color = Color.Red);
-                    }
-
-                    bool M17 = modbusMaster.ReadInputs(slaveAddress, 2065, 1)[0]; //m17
-                    if (M17)
-                    {
-                        InvokeDefine(() => ledBulbM17.Color = Color.Green);
-                    }
-                    else
-                    {
-                        InvokeDefine(() => ledBulbM17.Color = Color.Red);
-                    }
                 }
                 catch (Exception ex)
                 {
@@ -779,7 +761,7 @@ namespace WindowsApplication1
                 // Çalışıyor
                 InvokeDefine(() => { ledBulbWorkState.Color = Color.Green;
                     labelMachineWorkingState.Text = "Makine Çalışıyor";
-                }) ;
+                });
             }
             else
             {
@@ -822,18 +804,17 @@ namespace WindowsApplication1
         {
             try
             {
-                
                 PassportTrackList.Enqueue(dto);
 
                 bool res = ProcessPassportList.TryAdd(dto);
                 if (!res)
                 {
-                    AddLog($"Pasaport Listeye eklenemedi: {dto.PassportNo}");
+                    AddLog($"Pasaport listeye eklenemedi: {dto.PassportNo}");
                 }
             }
             catch (Exception)
             {
-                AddLog("Pasaport Listeye eklenemedi");
+                AddLog("Pasaport listeye eklenemedi");
             }
             // ProcessPassportList.CompleteAdding();
         }
@@ -867,7 +848,7 @@ namespace WindowsApplication1
 
                     log.Warning($"Paket Bitirildi");
                     // Ekrana uyarı
-                    AddLog($"Paket bitirildi Sayı:{batchCount}, Paket Kodu {batchCode}");
+                    AddLog($"Paket bitirildi, Sayı:{batchCount}, Paket Kodu {batchCode}");
 
 
                     #region OLEDB Test
@@ -888,7 +869,6 @@ namespace WindowsApplication1
                                 AddLog("Gönderime hazır Pasaport bulunamadı");
                                 isSentPassport = true;
                             }
-                            //con.Close();
                             return;
                         }
                         log.Information($" Gönderime hazır Pasaportlar BatchCode ile işaretlendi");
@@ -917,11 +897,8 @@ namespace WindowsApplication1
                             log.Warning($" Pasaportlara ait batch oluşturulamadı");
                             // Ekrana uyarı
                             AddLog("Pasaportlara ait batch oluşturulamadı");
-                            //con.Close();
                             return;
                         }
-
-                        //con.Close();
                     }
                     var reportPath = $"C:/BitenIsler/{DateTime.Now.ToString("dd.MM.yyyy")}/{DateTime.Now.ToString("ddMMyyyyHHmmss")}.xlsx";
                     ReportService.ExportBatch("Paket_Bilgi", new Batches()
@@ -933,11 +910,7 @@ namespace WindowsApplication1
                     }, reportPath);
                     SendToPrinter(reportPath);
                     #endregion
-                    // Paket raporu çıkar
-
                 });
-
-               
             }
             catch (Exception ex)
             {
@@ -967,14 +940,7 @@ namespace WindowsApplication1
             //2.hızda harici konveyörü çalıştırarak pasaportların arasını aç
             try
             {
-                //Task.Run(() => {
-                    //modbusMaster.WriteSingleCoil(slaveAddress, 1287, true); //Y7 set
-                    //modbusMaster.WriteSingleCoil(slaveAddress, 1308, true); //Y34 set
-                    //Thread.Sleep(_ConveyourLongStep);
-                    //modbusMaster.WriteSingleCoil(slaveAddress, 1287, false); //Y7 reset
-                    //modbusMaster.WriteSingleCoil(slaveAddress, 1308, false); //Y34 set
                     modbusMaster.WriteSingleCoil(slaveAddress,2066, true);//M18 set(ExternalConveyorLongStep) 
-                //});
 
                     return true;
             }
@@ -998,13 +964,7 @@ namespace WindowsApplication1
             {
                 // Paket Bitimi
                 DriveOutputConveyourLong();
-
             }
-            //else
-            //{
-            //    DriveOutputConveyourShort();
-
-            //}
 
             InvokeDefine(() => {
                 txtOutPassCount.Text = SucceedPassportCount.ToString();
@@ -1026,15 +986,14 @@ namespace WindowsApplication1
                     var reader = cmd.ExecuteNonQuery();
                     if (reader == 0)
                     {
-                        // kayıt güncelleme başarısız
-                        //AddLog($"Pasaport barkodu veri tabanında bulunamadı:{decodedData2}");
                         log.Error($"{LastSucceedPttBarcode} PTT barkodlu pasaport hatalı olarak işaretlendi.");
+                        AddLog($"{LastSucceedPttBarcode} PTT barkodlu pasaport hatalı olarak işaretlendi,beklenmedik ürün.");
                     }
-                    //con.Close();
                 }
             }
             catch (Exception ex)
             {
+                // kayıt güncelleme başarısız
                 log.Error(ex,$"{LastSucceedPttBarcode} PTT barkodlu pasaport hatalı olarak işaretlenirken hata alındı.");
             }
         }
@@ -1051,12 +1010,12 @@ namespace WindowsApplication1
             InvokeDefine(() => { 
                 lstLog.BackColor = Color.LightCoral;
                 lstLog.ForeColor = Color.White;
-                lstLog.Items.Add(logtxt);});
+                lstLog.Items.Insert(0,logtxt);});
         }
         void AddInfoLog(string logtxt)
         {
             InvokeDefine(() => {
-                lstLog.Items.Add(logtxt);
+                lstLog.Items.Insert(0,logtxt);
             });
         }      
 
@@ -1064,7 +1023,6 @@ namespace WindowsApplication1
         {
             try
             {
-                #region OLEDB Test
                 using (var con = new SqlConnection(sqlConnectionstring))
                 {
                     con.Open();
@@ -1080,19 +1038,16 @@ namespace WindowsApplication1
                     {
                         var eff3 = command.ExecuteNonQuery();
                     }
-                    //con.Close();
 
                     //MessageBox.Show("Veri tabanı temizleme işlemi tamamlandı", "Başarılı ışlem",MessageBoxButtons.OK,MessageBoxIcon.Information);
                     AddLog("Veri tabanı temizleme işlemi tamamlandı");
-
                 }
-                #endregion
             }
             catch (Exception ex)
             {
                 log.Error(ex,"Veri tabanı temizleme işleminde hata alındı");
                 AddLog("Veri tabanı temizleme işleminde hata alındı");
-                MessageBox.Show("Veri tabanı temizleme işleminde hata alındı", "Başarısız ışlem", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show("Veri tabanı temizleme işleminde hata alındı", "Başarısız işlem", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
@@ -1112,7 +1067,7 @@ namespace WindowsApplication1
 
         private void StartSplashForm()
         {
-            //Application.Run(new SplashForm());
+            Application.Run(new SplashForm());
         }
         private void comboBoxPlcPort_DropDown(object sender, EventArgs e)
         {
@@ -1148,13 +1103,12 @@ namespace WindowsApplication1
             }
         }
 
-       
-
         void ClearLog()
         {
             // Kontrol flagleri resetleniyor
             isEmergencyStop = false;
             isDoorOpen = false;
+            isDrawerTopDoorOpen = false;
             isDrawer1Open = false;
             isDrawer2Open = false;
             isDrawer1Full = false;
@@ -1188,7 +1142,6 @@ namespace WindowsApplication1
 
             byte[] buffer = new byte[1024];
 
-            //var sad = context.Database.CanConnect();// ilk pasaportu yazdırırken gecikme yaşanıyordu boş query çalıştırıp önceden yüklenmesini 
             label = File.ReadAllText(@"C:\PHASE.txt");
             #region OLEDB Test
             //SqlConnection con = new SqlConnection(sqlConnectionstring);
@@ -1200,21 +1153,21 @@ namespace WindowsApplication1
                 try
                 {
                     log.Information("bekliyor");
-                    //InvokeDefine(() => lstLog.Items.Add($"{DateTime.Now.ToString("HH:mm:ss.ffffff")} - bekliyor"));
                     int bytesRead = clientSocket.Receive(buffer);
-                    //InvokeDefine(() => lstLog.Items.Add($"{DateTime.Now.ToString("HH:mm:ss.ffffff")} - Mesaj alındı"));
                     log.Information(" Mesaj alındı");
 
                     // Encoder değeri Al 
+                    #region Giriş Encoder Değeri
                     long EncoderPosition = 0;
-                    var InputEncoderValues = modbusMaster.ReadHoldingRegisters(slaveAddress, 4796, 4);
+                    var InputEncoderValues = modbusMaster.ReadHoldingRegisters(slaveAddress, 4796, 4); //D700 encoder değeri alınıyor
 
                     var encByte = BitConverter.GetBytes(InputEncoderValues[0]);
                     var encByte2 = BitConverter.GetBytes(InputEncoderValues[1]);
                     byte[] lenghtArray = new byte[8];
                     Array.Copy(encByte, 0, lenghtArray, 0, 2);
                     Array.Copy(encByte2, 0, lenghtArray, 2, 2);
-                    EncoderPosition = BitConverter.ToInt64(lenghtArray, 0);
+                    EncoderPosition = BitConverter.ToInt64(lenghtArray, 0); 
+                    #endregion
 
                     data = Encoding.ASCII.GetString(buffer, 0, bytesRead);
                     string dataSubs = data.TrimEnd('\r', '\n');
@@ -1230,7 +1183,6 @@ namespace WindowsApplication1
                             txtInputBReader.Text = "-";
                         });
                         Listing(new PassTrackDTO() { EncoderPosition = EncoderPosition, PassportNo = "No Read", PttBarcode = 0 });
-                        //Rejectinput();
                         log.Information($" - Barkod okunamadı - {decodedData}-{EncoderPosition}");
                         InvokeDefine(() => lstLog.Items.Insert(0, $" - Barkod okunamadı"));
                     }
@@ -1291,51 +1243,43 @@ namespace WindowsApplication1
                                 long ptt = 0;
                                 var conres = Int64.TryParse(reader["PttBarkod"].ToString(), out ptt);
                                 if (conres)
-                                    input.PttBarkod = ptt;
-
+                                input.PttBarkod = ptt;
                             }
                             reader.Close();
                         }
-                        
                         #endregion
 
-                        //InvokeDefine(() => lstLog.Items.Add($"{DateTime.Now.ToString("HH:mm:ss.ffffff")} - Data alındı  - {decodedData}"));
                         log.Information($" - Data alındı  - {decodedData}-{EncoderPosition}");
 
 
                         string labData = label;
                         if (input.PttBarkod != null && input.PttBarkod != 0)
                         {
-                            //InvokeDefine(() => lstLog.Items.Add($"{DateTime.Now.ToString("HH:mm:ss.ffffff")} - Veri işleniyor  - {decodedData}"));
                             log.Information($" - Veri işleniyor  - {decodedData}-{EncoderPosition}");
 
 
                             labData = labData.Replace("PttBarkod", input.PttBarkod.ToString())
-                                         .Replace("AliciAdSoyad1", input.AliciAdSoyad1)
-                                         .Replace("Alici2AdSoyad1", input.Alici2AdSoyad1)
-                                         .Replace("AliciAdres1", input.AliciAdres1)
-                                         .Replace("AliciAdres2", input.AliciAdres2)
-                                         .Replace("AliciAdres3", input.AliciAdres3)
-                                         .Replace("AliciCepTelefonu", input.AliciCepTelefonu)
-                                         .Replace("TeslimAlacakKisi1", input.TeslimAlacakKisi1)
-                                         .Replace("IadeAdresi1", input.IadeAdresi1)
-                                         .Replace("IadeAdresi2", input.IadeAdresi2)
-                                         .Replace("IadeAdresi3", input.IadeAdresi3);
+                                             .Replace("AliciAdSoyad1", input.AliciAdSoyad1)
+                                             .Replace("Alici2AdSoyad1", input.Alici2AdSoyad1)
+                                             .Replace("AliciAdres1", input.AliciAdres1)
+                                             .Replace("AliciAdres2", input.AliciAdres2)
+                                             .Replace("AliciAdres3", input.AliciAdres3)
+                                             .Replace("AliciCepTelefonu", input.AliciCepTelefonu)
+                                             .Replace("TeslimAlacakKisi1", input.TeslimAlacakKisi1)
+                                             .Replace("IadeAdresi1", input.IadeAdresi1)
+                                             .Replace("IadeAdresi2", input.IadeAdresi2)
+                                             .Replace("IadeAdresi3", input.IadeAdresi3);
 
-                            //InvokeDefine(() => lstLog.Items.Add($"{DateTime.Now.ToString("HH:mm:ss.ffffff")} - Veri işlendi  - {decodedData}"));
                             log.Information($" - Veri işlendi  - {decodedData}-{EncoderPosition}");
 
 
                             Listing(new PassTrackDTO() { PassportNo = input.PasaportNo, PttBarcode = input.PttBarkod.Value, EncoderPosition = EncoderPosition });
-                            //InvokeDefine(() => lstLog.Items.Add($"{DateTime.Now.ToString("HH:mm:ss.ffffff")} - Etiket basılıyor- {decodedData}"));
                             log.Information($" - Etiket basılıyor - {decodedData}-{EncoderPosition}");
-
 
                             Printlabel(labData);
                             InvokeDefine(() => {
                                 txtPrinterBox.Text = decodedData;
                             });
-                            //InvokeDefine(() => lstLog.Items.Add($"{DateTime.Now.ToString("HH:mm:ss.ffffff")} - Etiket Basıldı- {decodedData}"));
                             log.Information($" - Etiket basıldı- {decodedData}-{EncoderPosition}");
                         }
                         else
@@ -1345,8 +1289,6 @@ namespace WindowsApplication1
                             });
                             Listing(new PassTrackDTO() { PassportNo = "No Read", PttBarcode = 0, EncoderPosition = EncoderPosition });
 
-                            //Rejectinput();
-                            //InvokeDefine(() => lstLog.Items.Add($"{DateTime.Now.ToString("HH:mm:ss.ffffff")} - Pasaport veri tabanında yok, pasaport atıldı - {decodedData}"));
                             log.Information($" - Pasaport veritabanında yok, pasaport atıldı - {decodedData}-{EncoderPosition}");
                             AddLog("Pasaport verisi veritabanında bulunamadı");
                             DataNo();
@@ -1355,16 +1297,10 @@ namespace WindowsApplication1
                 }
                 catch (Exception ex)
                 {
-                    log.Error(ex, "Uygulama ana döngüde hata alındı");
-                    AddLog("Uygulama ana döngüde hata alındı");
-                    #region OLEDB TEST
-                    //con.Close();
-                    #endregion
+                    log.Error(ex, "Ana döngüde hata alındı");
+                    AddLog("Ana döngüde hata alındı");
                 }
             }
-            #region OLEDB TEST
-            //con.Close();
-            #endregion
         }
         private void worker_DoWork2(object sender, DoWorkEventArgs e)
         {
@@ -1399,8 +1335,6 @@ namespace WindowsApplication1
                     if (dataConvert2.IsNullOrEmpty() || dataConvert2.Length < 8)
                     {
                         log.Warning($" PTT Barkodu okunamadı- {decodedData2}");
-
-                        // RejectOut();
                         // continue;
                     }
                     else
@@ -1414,7 +1348,7 @@ namespace WindowsApplication1
                         }
                         else
                         {
-                            log.Error($" PTT Barkodu Dönüştürme işlemi başarılı {decodedData2}");
+                            log.Error($" PTT Barkodu dönüştürme işlemi başarılı {decodedData2}");
                         }
                     }
 
@@ -1424,12 +1358,11 @@ namespace WindowsApplication1
                     if (!isNextExist)
                     {
                         // Listede pasaport yok
-                        //StopMachine();
                         InvokeDefine(() => {
                             txtOutputBReader.Text = "-";
                         });
-                        AddLog($"Çıkış Barkod okuyucusundan okunan pasaport takip listesinde bulunamadı Liste boş:{decodedData2}");
-                        log.Error($"Çıkış Barkod okuyucusundan okunan pasaport takip listesinde bulunamadı Liste boş:{decodedData2}");
+                        AddLog($"Çıkış Barkod okuyucusundan okunan değer pasaport takip listesinde bulunamadı. Liste boş:{decodedData2}");
+                        log.Error($"Çıkış Barkod okuyucusundan okunan değer pasaport takip listesinde bulunamadı. Liste boş:{decodedData2}");
 
                     }
                     else if (readedpassport.PttBarcode == 0 || pttbarcode == 0)
@@ -1442,7 +1375,6 @@ namespace WindowsApplication1
                         log.Warning($"Paspaort ve PTT barkod eşleşti {readedpassport}-{pttbarcode}");
 
                         InvokeDefine(() => {
-                            //label1.BackColor = Color.Green;
                             txtOutputBReader.Text = decodedData2;
                         });
                         // Veri tabanına başarılı tamamlandı
@@ -1459,7 +1391,6 @@ namespace WindowsApplication1
                         AddLog("Lütfen makineyi temizleyiniz!");
                         log.Error($"Çıkış Barkod okuyucusundan okunan pasaport takip listesinde :{readedpassport} - {decodedData2} eşleşmemektedir.");
                         modbusMaster.WriteSingleCoil(slaveAddress, 2063, true);//M15 crossCheck set
-                        //todo: messagebox çıkart
                         isClearMachine = true;
 
                         var crossCheck = MessageBox.Show("Eşleşme hatası algılandı.Lütfen Makineyi temizleyiniz. Makine temizlendikten sonra alarmları siliniz.", "Eşleşme Hatası", MessageBoxButtons.OK, MessageBoxIcon.Error);
@@ -1517,7 +1448,7 @@ namespace WindowsApplication1
                     log.Information($"Çıkışta Pasaport bulundu {findPassport.PttBarcode}");
 
                     //Veri tabanı güncellemesi
-                    #region OLEDB TEST
+                    #region Passaport Finished Procedure
 
                     using (var con = new SqlConnection(sqlConnectionstring))
                     {
@@ -1551,7 +1482,7 @@ namespace WindowsApplication1
                     #endregion
                     // Doğrulanan pasaportu listeden çıkar
                     // listeden fazla olanları çıkar.
-                    if (PassportTrackList.Count > 15)
+                    if (PassportTrackList.Count > 11)
                         PassportTrackList.TryDequeue(out var remove);
                 }
                 catch (Exception ex)
@@ -1628,14 +1559,13 @@ namespace WindowsApplication1
             var conString = txtDbConnectionString.Text;
             if (conString.IsNullOrEmpty())
             {
-                MessageBox.Show("Bağlantı cümlesi boş olamaz");
+                MessageBox.Show("'Bağlantı Cümlesi' boş olamaz");
                 return;
             }
 
             Settings.Default.DBConnectionString = conString;
             Settings.Default.Save();
-            MessageBox.Show("Bağlantı cümlesi kaydedildi");
-
+            MessageBox.Show("'Bağlantı Cümlesi' kaydedildi");
         }
 
         private void btnTestDBConnection_Click(object sender, EventArgs e)
@@ -1643,7 +1573,7 @@ namespace WindowsApplication1
             var conString = txtDbConnectionString.Text;
             if (conString.IsNullOrEmpty())
             {
-                MessageBox.Show("Bağlantı Cümlesi boş iken test Yapılamaz");
+                MessageBox.Show("'Bağlantı Cümlesi' boş iken test Yapılamaz");
                 return;
             }
 
@@ -1665,7 +1595,7 @@ namespace WindowsApplication1
 
         private void btnFabricSettings_Click(object sender, EventArgs e)
         {
-            var res = MessageBox.Show("Fabrika ayalarına dönmek istediğinizden emin misiniz ?", "Fabrika Ayarları", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+            var res = MessageBox.Show("Fabrika ayalarına dönmek istediğinizden emin misiniz?", "Fabrika Ayarları", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
             if (res == DialogResult.No)
                 return;
 
@@ -1676,42 +1606,50 @@ namespace WindowsApplication1
             textBoxInputBarcodeIP.Text = Settings.Default.InputBarcodeIP;
             textBoxOutputBarcodeIP.Text = Settings.Default.OutputBarcodeIP;
 
-            #region D522 settin
-            textBoxReject1BlowTime.Text = GonpaPasaportOtomasyonu.Properties.Settings.Default.Reject1BlowTime;
+            #region D522 setting
+            textBoxReject1BlowTime.Text = Settings.Default.Reject1BlowTime;
             #endregion
 
             #region D524 setting
-            textBoxReject2BlowTime.Text = GonpaPasaportOtomasyonu.Properties.Settings.Default.Reject2BlowTime;
+            textBoxReject2BlowTime.Text = Settings.Default.Reject2BlowTime;
             #endregion
 
             #region D540 setting
-            textBoxRejectInputTime.Text = GonpaPasaportOtomasyonu.Properties.Settings.Default.RejectInputTime;
+            textBoxRejectInputTime.Text = Settings.Default.RejectInputTime;
             #endregion
 
             #region D550 setting
-            textBoxRejectOutTime.Text = GonpaPasaportOtomasyonu.Properties.Settings.Default.RejectOutputTime;
+            textBoxRejectOutTime.Text = Settings.Default.RejectOutputTime;
             #endregion
 
             #region D560 setting
-            textBoxDrawer1Mask.Text = GonpaPasaportOtomasyonu.Properties.Settings.Default.Drawer1SensorMask;
+            textBoxDrawer1Mask.Text = Settings.Default.Drawer1SensorMask;
             #endregion
 
             #region D570 setting
-            textBoxDrawer2Mask.Text = GonpaPasaportOtomasyonu.Properties.Settings.Default.Drawer2SensorMask;
+            textBoxDrawer2Mask.Text = Settings.Default.Drawer2SensorMask;
             #endregion
 
             #region D504 setting
-            textBoxBlowOffset.Text = GonpaPasaportOtomasyonu.Properties.Settings.Default.BlowOffset;
+            textBoxBlowOffset.Text = Settings.Default.BlowOffset;
             #endregion
 
             #region D574 setting
-            numericUpDownExternalConvStop.Text = GonpaPasaportOtomasyonu.Properties.Settings.Default.ExtConveyorStop;
+            numericUpDownExternalConvStop.Text = Settings.Default.ExtConveyorStop;
             #endregion
 
-            txtDbConnectionString.Text = GonpaPasaportOtomasyonu.Properties.Settings.Default.DBConnectionString;
+            #region D2000 setting
+            nudConveyorSpeed.Value = Settings.Default.ConveyorSpeed;
+            #endregion
+
+            #region D2002 setting
+            nudVaccuumSpeed.Value = Settings.Default.VaccuumSpeed;
+            #endregion
+
+            txtDbConnectionString.Text = Settings.Default.DBConnectionString;
 
             #region PLC address
-            comboBoxPlcPort.Text = GonpaPasaportOtomasyonu.Properties.Settings.Default.PLCPort;
+            comboBoxPlcPort.Text = Settings.Default.PLCPort;
             #endregion
             MessageBox.Show("Fabrika ayarlarına dönüldü");
         }
@@ -1737,6 +1675,7 @@ namespace WindowsApplication1
                 stsInputBarcodeReader.BackColor = Color.YellowGreen;
                 stsOutputBarcodereader.BackColor = Color.YellowGreen;
                 stsPackMac.BackColor = Color.YellowGreen;
+                stsDrawerTopDoor.BackColor = Color.YellowGreen;
             });
             try
             {
@@ -1782,15 +1721,13 @@ namespace WindowsApplication1
             {
                 MessageBox.Show("Lütfen Çıkış barkod okuyucu bağlantı Ip Adresini doğru formatta giriniz.", "Format Uyarısı", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
-
             }
 
             Settings.Default.PrinterIpAddress = textBoxPrinterIpAddress.Text;
             Settings.Default.InputBarcodeIP = textBoxInputBarcodeIP.Text;
             Settings.Default.OutputBarcodeIP = textBoxOutputBarcodeIP.Text;
             Settings.Default.PistonRunOption = checkBoxPistonRunOption.Checked;
-            Settings.Default.PistonRunOption = checkBoxConveyorVaccuum.Checked;
-
+            Settings.Default.ConveyorVaccuum = checkBoxConveyorVaccuum.Checked;
 
             Settings.Default.PLCPort = comboBoxPlcPort.SelectedItem.ToString();
             Settings.Default.BlowOffset = textBoxBlowOffset.Text;
@@ -1799,6 +1736,8 @@ namespace WindowsApplication1
             Settings.Default.RejectInputTime = textBoxRejectInputTime.Text;
             Settings.Default.RejectOutputTime = textBoxRejectOutTime.Text;
             Settings.Default.ExtConveyorStop = numericUpDownExternalConvStop.Text;
+            Settings.Default.ConveyorSpeed=Convert.ToInt16(nudConveyorSpeed.Value);
+            Settings.Default.VaccuumSpeed = Convert.ToInt16(nudVaccuumSpeed.Value);
 
             Settings.Default.Drawer1SensorMask = textBoxDrawer1Mask.Text;
             Settings.Default.Drawer2SensorMask = textBoxDrawer2Mask.Text;
@@ -1813,6 +1752,17 @@ namespace WindowsApplication1
             Settings.Default.ConveyourShortStepSpan = Convert.ToInt32(nudConveyourShortStep.Value);
             Settings.Default.ConveyourLongStepSpan = Convert.ToInt32(nudConveyourLongStep.Value);
             Settings.Default.StopMachineOnFinishPack = chkStopMachineOnFinish.Checked;
+
+            #region Drawer Top Door
+            if (checkBoxDrawerDoor.Checked)
+            {
+                modbusMaster.WriteSingleCoil(slaveAddress, 2068, true);//M20 set
+            } 
+            else
+            {
+                modbusMaster.WriteSingleCoil(slaveAddress, 2068, false);//M20 reset
+            }
+            #endregion
 
             Settings.Default.Save();
             MessageBox.Show("Ayarlar kaydedildi.");
@@ -1852,23 +1802,29 @@ namespace WindowsApplication1
                 modbusMaster.WriteSingleRegister(slaveAddress, 4670, Convert.ToUInt16(numericUpDownExternalConvStop.Text));
                 #endregion
 
-                #region M450 set
+                #region D2000 setting
+                modbusMaster.WriteSingleRegister(slaveAddress, 6096, Convert.ToUInt16(nudConveyorSpeed.Value));
+                #endregion
+
+                #region D2002 setting
+                modbusMaster.WriteSingleRegister(slaveAddress, 6098, Convert.ToUInt16(nudVaccuumSpeed.Value));
+                #endregion
+
+                #region M450 set printer piston checkbox
                 if (checkBoxPistonRunOption.Checked == true)
                 {
                     modbusMaster.WriteSingleCoil(slaveAddress, 2498, true);
-
                 }
                 else
                 {
                     modbusMaster.WriteSingleCoil(slaveAddress, 2498, false);
-
                 }
                 #endregion
+
                 #region M451 set conveyor vaccuum checkbox
                 if (checkBoxConveyorVaccuum.Checked == true)
                 {
                     modbusMaster.WriteSingleCoil(slaveAddress, 2499, true);
-
                 }
                 else
                 {
@@ -1878,7 +1834,7 @@ namespace WindowsApplication1
             }
             catch (Exception)
             {
-                MessageBox.Show("Ayarlar Uygulanırken hata alındı.");
+                MessageBox.Show("Ayarlar uygulanırken hata alındı.");
             }
         }
 
@@ -1932,7 +1888,6 @@ namespace WindowsApplication1
                 PaketKodu = a.BatchCode,
                 Durum = ((PassportState)a.State).GetDescription<PassportState>(),
 
-
             }).FirstOrDefault();
             if (passes == null)
             {
@@ -1968,11 +1923,10 @@ namespace WindowsApplication1
                 PasaportNo = a.PassportCount,
                 Durum = ((BatchState)a.State).GetDescription<BatchState>(),
 
-
             }).ToList();
             if (passes.IsNullOrEmpty())
             {
-                MessageBox.Show("Arama kriterlerine uygun Paket bulunamadı");
+                MessageBox.Show("Arama kriterlerine uygun 'Paket' bulunamadı");
                 dgwPassports.DataSource = null;
                 return;
             }
@@ -2025,12 +1979,11 @@ namespace WindowsApplication1
             else
             {
             }
-
         }
 
         private void buttonExit_Click(object sender, EventArgs e)
         {
-            var res = MessageBox.Show("Uygulamadan Çıkmak istediğinize emin misiniz?", "Çıkış", MessageBoxButtons.YesNo);
+            var res = MessageBox.Show("Uygulamadan çıkmak istediğinize emin misiniz?", "Çıkış", MessageBoxButtons.YesNo);
             if (res == DialogResult.Yes)
             {
                 Application.Exit();
@@ -2039,7 +1992,7 @@ namespace WindowsApplication1
         private void buttonDatabaseProcess_Click(object sender, EventArgs e)
         {
             tabMain.SelectTab("tbpDbSettings");
-            lblPageTitle.Text = "Veri Tabanı ışlemleri";
+            lblPageTitle.Text = "Veri Tabanı İşlemleri";
         }
 
         private void buttonAyarlar_Click(object sender, EventArgs e)
@@ -2050,13 +2003,6 @@ namespace WindowsApplication1
             lblPageTitle.Text = "Ayarlar";
         }
 
-        private void buttonAlarm_Click(object sender, EventArgs e)
-        {
-            panelAlarm.Visible = true;
-            panelIzleme.Visible = false;
-            panelAyarlar.Visible = false;
-            panelElilePasaportGirdisi.Visible = false;
-        }
         private void buttonElilePasaportGirisi_Click(object sender, EventArgs e)
         {
             tabMain.SelectTab("tbpManuel");
@@ -2074,7 +2020,6 @@ namespace WindowsApplication1
             var label = GetPassportData();
             if (label.IsNullOrEmpty())
                 return;
-
 
                 PrintManuellabel(label);
 
@@ -2101,7 +2046,6 @@ namespace WindowsApplication1
                 return;
 
             FinishPack();
-
         }
 
         private void btnOutputShort_Click(object sender, EventArgs e)
@@ -2114,7 +2058,7 @@ namespace WindowsApplication1
             DriveOutputConveyourLong();
         }
 
-        private void button2_Click_1(object sender, EventArgs e)
+        private void buttonManualCreate_Click(object sender, EventArgs e)
         {
             using (var con = new SqlConnection(sqlConnectionstring))
             {
@@ -2137,9 +2081,21 @@ namespace WindowsApplication1
                     //}
                     //con.Close();
                 } 
-
-
             }
+        }
+
+        private void buttonPrintPassportSearch_Click(object sender, EventArgs e)
+        {
+            DGVPrinter dGVPrinter = new DGVPrinter();
+            dGVPrinter.Title = "Pasaportlar";
+            dGVPrinter.SubTitleFormatFlags = StringFormatFlags.LineLimit | StringFormatFlags.NoClip;
+            dGVPrinter.PageNumbers = true;
+            dGVPrinter.PageNumberInHeader = false;
+            dGVPrinter.PorportionalColumns=true;
+            dGVPrinter.HeaderCellAlignment = StringAlignment.Near;
+            dGVPrinter.Footer = "snn";
+            dGVPrinter.FooterSpacing = 15;
+            dGVPrinter.PrintDataGridView(dgwPassports);
         }
 
         private void textBoxBarkodM_KeyPress(object sender, KeyPressEventArgs e)

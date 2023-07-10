@@ -71,5 +71,11 @@
     <Setting Name="StopMachineOnFinishPack" Type="System.Boolean" Scope="User">
       <Value Profile="(Default)">False</Value>
     </Setting>
+    <Setting Name="VaccuumSpeed" Type="System.Decimal" Scope="User">
+      <Value Profile="(Default)">10.0</Value>
+    </Setting>
+    <Setting Name="ConveyorSpeed" Type="System.Decimal" Scope="User">
+      <Value Profile="(Default)">25.0</Value>
+    </Setting>
   </Settings>
 </SettingsFile>

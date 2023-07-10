@@ -299,5 +299,29 @@ namespace GonpaPasaportOtomasyonu.Properties {
                 this["StopMachineOnFinishPack"] = value;
             }
         }
+        
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("10.0")]
+        public decimal VaccuumSpeed {
+            get {
+                return ((decimal)(this["VaccuumSpeed"]));
+            }
+            set {
+                this["VaccuumSpeed"] = value;
+            }
+        }
+        
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("25.0")]
+        public decimal ConveyorSpeed {
+            get {
+                return ((decimal)(this["ConveyorSpeed"]));
+            }
+            set {
+                this["ConveyorSpeed"] = value;
+            }
+        }
     }
 }
